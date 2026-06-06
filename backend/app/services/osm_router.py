@@ -129,10 +129,12 @@ def compute_weather_route(
         if not path_nodes:
             return [], None
 
-        polyline = [
+        polyline = [{"lat": start_lat, "lng": start_lng}]
+        polyline += [
             {"lat": _nodes[n]["lat"], "lng": _nodes[n]["lng"]}
             for n in path_nodes
         ]
+        polyline.append({"lat": end_lat, "lng": end_lng})
         distance = _polyline_distance_m(polyline)
         return polyline, distance
 
