@@ -25,14 +25,56 @@ GRAPH_PATH = Path(__file__).parent.parent.parent / "data" / "daejeon_weather_gra
 _G = None
 
 
+def _build_graph():
+    """그래프 파일이 없을 때 OSM에서 다운로드해 빌드한다 (첫 실행 1회)."""
+    CENTER = (36.3504, 127.3845)
+    DIST_M = 3000
+    logger.info("OSM 그래프 빌드 시작 (약 30~60초 소요)...")
+    GRAPH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    G = ox.graph_from_point(CENTER, dist=DIST_M, network_type="walk", retain_all=False)
+    for u, v, k, data in G.edges(keys=True, data=True):
+        highway = data.get("highway", "residential")
+        if isinstance(highway, list):
+            highway = highway[0]
+        lit     = data.get("lit", "no")
+        covered = data.get("covered", "no")
+        tunnel  = data.get("tunnel", "no")
+        if covered == "yes" or tunnel == "yes":
+            data["uv_cost"] = 0.0
+        elif highway in ("footway", "pedestrian"):
+            data["uv_cost"] = 0.3
+        elif highway in ("primary", "secondary"):
+            data["uv_cost"] = 0.9
+        elif highway in ("residential", "living_street"):
+            data["uv_cost"] = 0.5
+        else:
+            data["uv_cost"] = 0.6
+        if lit == "yes":
+            data["night_cost"] = 0.1
+        elif highway in ("primary", "secondary", "tertiary"):
+            data["night_cost"] = 0.2
+        elif highway in ("footway", "path", "steps"):
+            data["night_cost"] = 0.9
+        else:
+            data["night_cost"] = 0.5
+        if covered == "yes" or tunnel == "yes":
+            data["rain_cost"] = 0.0
+        elif highway == "pedestrian":
+            data["rain_cost"] = 0.3
+        elif highway in ("footway", "path"):
+            data["rain_cost"] = 0.7
+        else:
+            data["rain_cost"] = 0.85
+    ox.save_graphml(G, GRAPH_PATH)
+    logger.info("OSM 그래프 빌드 완료: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
+
+
 def _load_graph():
     global _G
     if _G is None:
         if not GRAPH_PATH.exists():
-            raise FileNotFoundError(
-                f"Graph not found: {GRAPH_PATH}. "
-                "Run: python scripts/build_daejeon_graph.py"
-            )
+            logger.warning("그래프 파일 없음 → 자동 빌드 시작 (배포 후 최초 1회)")
+            _build_graph()
         _G = ox.load_graphml(GRAPH_PATH)
         logger.info("OSM 그래프 로드 완료: %d nodes, %d edges", _G.number_of_nodes(), _G.number_of_edges())
     return _G
