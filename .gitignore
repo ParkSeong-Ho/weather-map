@@ -30,8 +30,9 @@ backend/.env
 backend/*.db
 backend/*.sqlite3
 
-# --- 대용량 그래프 데이터 (fork에서는 포함, 팀 레포는 제외) ---
-# backend/data/*.graphml
+# --- 대용량 그래프 데이터 ---
+backend/data/*.graphml
+# backend/data/*.json 은 추적 (경량 전처리 결과물)
 
 # --- IDE 및 에디터 관련 ---
 .vscode/
