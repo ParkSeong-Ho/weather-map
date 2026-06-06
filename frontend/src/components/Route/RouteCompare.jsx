@@ -152,7 +152,7 @@ export default function RouteCompare() {
         // 도착 마커: Kakao CustomOverlay 빨간 핀
         if (endOverlayRef.current) endOverlayRef.current.setMap(null);
         const content = `
-          <div style="position:relative;transform:translate(-50%,-100%);font-family:Pretendard,sans-serif">
+          <div style="position:relative;transform:translateX(-50%);font-family:Pretendard,sans-serif">
             <div style="background:#E5484D;color:#fff;font-size:12px;font-weight:700;letter-spacing:.5px;
                         padding:3px 9px;border-radius:7px;white-space:nowrap;
                         position:absolute;left:50%;top:-10px;transform:translate(-50%,-100%)">도착

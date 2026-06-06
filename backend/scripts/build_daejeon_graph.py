@@ -10,7 +10,7 @@ import osmnx as ox
 
 # 대전 도심 중심 (대전역 인근) 3km 반경 보행자 네트워크
 CENTER = (36.3504, 127.3845)
-DIST_M = 3000
+DIST_M = 5000
 
 print(f"OSM에서 대전 보행자 그래프 다운로드 중 (반경 {DIST_M}m)...")
 G = ox.graph_from_point(CENTER, dist=DIST_M, network_type="walk", retain_all=False)
