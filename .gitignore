@@ -30,8 +30,8 @@ backend/.env
 backend/*.db
 backend/*.sqlite3
 
-# --- 대용량 그래프 데이터 (Render 빌드 시 자동 생성) ---
-backend/data/*.graphml
+# --- 대용량 그래프 데이터 (fork에서는 포함, 팀 레포는 제외) ---
+# backend/data/*.graphml
 
 # --- IDE 및 에디터 관련 ---
 .vscode/
