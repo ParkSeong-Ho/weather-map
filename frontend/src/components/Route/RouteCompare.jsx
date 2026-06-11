@@ -31,6 +31,21 @@ function getActivePolyline(routes, key, mode) {
   return route.foot_polyline?.length ? route.foot_polyline : route.polyline;
 }
 
+function getNormalDescription(mode) {
+  if (mode === "walk") return "T맵 보행자 최단 경로";
+  if (mode === "bike") return "자전거 최단 경로";
+  return "자동차 최단 시간 경로 (카카오 내비)";
+}
+
+function getContextDescription(route, mode) {
+  const desc = route?.description || "날씨 맞춤 · 쾌적한 경로";
+  const viaIdx = desc.indexOf(" — ");
+  const via = viaIdx !== -1 ? desc.slice(viaIdx) : "";
+  if (mode === "bike") return `자전거 날씨 최적 경로${via}`;
+  if (mode === "car")  return `날씨 참고 경로 (보행자 기반)${via}`;
+  return desc;
+}
+
 // ── 색상 (핸드오프 토큰 hex — Kakao API는 Tailwind 클래스 불가) ──────────────
 const ROUTE_COLORS = {
   normal:  "#2542C8",
@@ -199,7 +214,9 @@ export default function RouteCompare() {
     const { kakao } = window;
     if (!routes || !mapInstance.current || !kakao) return;
 
-    Object.values(polylinesRef.current).forEach(({ outer, inner }) => { outer?.setMap(null); inner?.setMap(null); });
+    Object.values(polylinesRef.current).forEach(({ outer, inner, conns }) => {
+      outer?.setMap(null); inner?.setMap(null); conns?.forEach((c) => c.setMap(null));
+    });
     polylinesRef.current = {};
 
     const bounds = new kakao.maps.LatLngBounds();
@@ -223,17 +240,27 @@ export default function RouteCompare() {
       outerPl.setMap(mapInstance.current);
       const innerPl = new kakao.maps.Polyline({ path, strokeWeight: isSelected ? 10 : 6, strokeColor: color, strokeOpacity: isSelected ? 1.0 : 0.95, strokeStyle: "solid", endArrow: true });
       innerPl.setMap(mapInstance.current);
-      polylinesRef.current[key] = { outer: outerPl, inner: innerPl };
+
+      // 경로 끝 ↔ 출발/도착 핀: 지도앱처럼 가는 점선 연결선
+      const conns = [];
+      [[startPos, path[0]], [endPos, path[path.length - 1]]].forEach(([pin, edge]) => {
+        if (!pin || !edge) return;
+        const conn = new kakao.maps.Polyline({
+          path: [new kakao.maps.LatLng(pin.lat, pin.lng), edge],
+          strokeWeight: 3, strokeColor: color, strokeOpacity: 0.65, strokeStyle: "shortdash",
+        });
+        conn.setMap(mapInstance.current);
+        conns.push(conn);
+      });
+      polylinesRef.current[key] = { outer: outerPl, inner: innerPl, conns };
     });
 
-    if (hasPolyline) {
-      mapInstance.current.setBounds(bounds);
-    } else if (startPos && endPos) {
-      bounds.extend(new kakao.maps.LatLng(startPos.lat, startPos.lng));
-      bounds.extend(new kakao.maps.LatLng(endPos.lat, endPos.lng));
+    if (startPos) bounds.extend(new kakao.maps.LatLng(startPos.lat, startPos.lng));
+    if (endPos)   bounds.extend(new kakao.maps.LatLng(endPos.lat, endPos.lng));
+    if (hasPolyline || (startPos && endPos)) {
       mapInstance.current.setBounds(bounds);
     }
-  }, [routes, mode, selectedRoute]);
+  }, [routes, mode, selectedRoute, startPos, endPos]);
 
   const handleReset = () => {
     if (startMarkerRef.current) startMarkerRef.current.setMap(null);
@@ -241,7 +268,9 @@ export default function RouteCompare() {
     startMarkerRef.current = null;
     endOverlayRef.current  = null;
     pickStepRef.current    = 0;
-    Object.values(polylinesRef.current).forEach(({ outer, inner }) => { outer?.setMap(null); inner?.setMap(null); });
+    Object.values(polylinesRef.current).forEach(({ outer, inner, conns }) => {
+      outer?.setMap(null); inner?.setMap(null); conns?.forEach((c) => c.setMap(null));
+    });
     polylinesRef.current = {};
     setStartPos(null); setEndPos(null); setRoutes(null);
     setRecommendation(""); setContextTags([]); setWarnings([]); setWeather(null);
@@ -250,10 +279,11 @@ export default function RouteCompare() {
 
   const handleSelectRoute = (key) => {
     setSelectedRoute(key);
-    Object.entries(polylinesRef.current).forEach(([k, { outer, inner }]) => {
+    Object.entries(polylinesRef.current).forEach(([k, { outer, inner, conns }]) => {
       const sel = k === key;
       outer?.setOptions({ strokeWeight: sel ? 16 : 10, strokeOpacity: sel ? 1.0 : 0.4 });
       inner?.setOptions({ strokeWeight: sel ? 10 : 6,  strokeOpacity: sel ? 1.0 : 0.3 });
+      conns?.forEach((c) => c.setOptions({ strokeOpacity: sel ? 0.85 : 0.2 }));
     });
   };
 
@@ -339,7 +369,7 @@ export default function RouteCompare() {
             <div className="flex flex-col gap-3 pb-6">
               <RouteCard
                 tone="weather" Icon={IconSun} title="날씨 최적 경로" recommended
-                description={routes?.context?.description || "날씨 맞춤 · 쾌적한 경로"}
+                description={getContextDescription(routes?.context, mode)}
                 eta={calcTravelTime(routes?.context, contextMode)}
                 distance={formatDistance(routes?.context, contextMode)}
                 selected={selectedRoute === "context"}
@@ -348,7 +378,7 @@ export default function RouteCompare() {
               />
               <RouteCard
                 tone="primary" Icon={IconClock} title="최단 경로"
-                description={routes?.normal?.description || "시간 최단 · 카카오 내비"}
+                description={getNormalDescription(mode)}
                 eta={calcTravelTime(routes?.normal, mode)}
                 distance={formatDistance(routes?.normal, mode)}
                 selected={selectedRoute === "normal"}
