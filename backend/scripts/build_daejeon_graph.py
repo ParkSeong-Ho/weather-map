@@ -68,6 +68,40 @@ frac_by_edge = {idx: _shaded_fraction(geom) for idx, geom in edges_m.geometry.it
 shaded_cnt = sum(1 for f in frac_by_edge.values() if f > 0.3)
 print(f"  그늘 30%+ 엣지: {shaded_cnt}/{len(frac_by_edge)}")
 
+# ── 하천변 노출 (천변 도로 = 건물·나무 그늘 없는 완전 노출) ──────────────
+RIVER_BUFFER_M = 25
+
+print("하천 데이터 다운로드 중...")
+river_geoms = []
+try:
+    water = ox.features_from_point(
+        CENTER, {"natural": "water", "waterway": ["river", "stream"]}, dist=DIST_M + 200
+    ).to_crs(crs_m)
+    for g in water.geometry:
+        if g is None:
+            continue
+        if g.geom_type in ("Polygon", "MultiPolygon"):
+            river_geoms.append(g.buffer(RIVER_BUFFER_M))
+        elif g.geom_type in ("LineString", "MultiLineString"):
+            river_geoms.append(g.buffer(RIVER_BUFFER_M))
+except Exception as e:
+    print(f"  경고: 하천 조회 실패 ({e}) — 하천변 노출 보정 없이 진행")
+
+_river_tree = STRtree(river_geoms) if river_geoms else None
+
+def _river_fraction(geom) -> float:
+    if _river_tree is None or geom is None or geom.length == 0:
+        return 0.0
+    idxs = _river_tree.query(geom)
+    if len(idxs) == 0:
+        return 0.0
+    cover = unary_union([river_geoms[i] for i in idxs])
+    return min(geom.intersection(cover).length / geom.length, 1.0)
+
+river_by_edge = {idx: _river_fraction(geom) for idx, geom in edges_m.geometry.items()}
+river_cnt = sum(1 for f in river_by_edge.values() if f > 0.5)
+print(f"  하천변(50%+) 엣지: {river_cnt}/{len(river_by_edge)}")
+
 # 각 엣지에 날씨 비용 속성 추가
 for u, v, k, data in G.edges(keys=True, data=True):
     highway = data.get("highway", "residential")
@@ -95,6 +129,9 @@ for u, v, k, data in G.edges(keys=True, data=True):
             "residential": 0.55, "living_street": 0.5,
             "footway": 0.75, "pedestrian": 0.75, "path": 0.7, "steps": 0.7,
         }.get(highway, 0.7)
+        # 하천변 도로는 건물 그늘도 없는 완전 노출 (가로수가 실측되면 아래에서 회복)
+        if river_by_edge.get((u, v, k), 0.0) > 0.5:
+            base = max(base, 0.9)
         # 실측 그늘 반영: 수관에 덮인 구간 비율만큼 0.15(그늘 아래)로 보간
         frac = frac_by_edge.get((u, v, k), 0.0)
         data["uv_cost"] = round(base * (1 - frac) + 0.15 * frac, 3)

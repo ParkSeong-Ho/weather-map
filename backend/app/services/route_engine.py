@@ -351,7 +351,12 @@ async def build_routes(
         return f" — {METRIC_LABELS[metric]} {w}%"
 
     if s.get("shade", 0) >= 40:
-        context_desc = f"자외선 회피 그늘 우선 경로{via or _vs('shade_pct')}"
+        w, b = w_stat.get("shade_pct"), b_stat.get("shade_pct")
+        if w is not None and b is not None and w - b < 8:
+            # 실데이터상 그늘 우회로가 사실상 없는 방향 — 과장 없이 알림
+            context_desc = f"이 방향은 그늘이 적습니다 (그늘 {w}% · 최단 {b}%) — 모자·선크림 필수"
+        else:
+            context_desc = f"자외선 회피 그늘 우선 경로{via or _vs('shade_pct')}"
     elif "야간" in context_tags:
         context_desc = f"야간 밝은 거리 우선 경로{via or _vs('lit_pct')}"
     elif "비" in context_tags:
