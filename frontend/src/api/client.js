@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { setupErrorInterceptor } from '../utils/apiErrorHandler';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://weather-map-7f9f.onrender.com';
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://weather-mapa.onrender.com';
 
 export const api = axios.create({
   baseURL: BASE_URL,
