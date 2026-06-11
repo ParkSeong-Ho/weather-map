@@ -156,6 +156,64 @@ for u, v, k, data in G.edges(keys=True, data=True):
     else:
         data["rain_cost"] = 0.85
 
+# ── 보행 지하 코리도 주입 (OSM에 없는 지하상가 — 수동 데이터) ──────────────
+# 지상 도로 선형을 따라 지하 노드를 복제하고 출입구로 연결한다.
+# 비/자외선 0 (실내), 야간 0.1 (조명) — 비 경로가 실제로 지하상가를 경유하게 됨.
+import json
+import math
+import networkx as nx
+
+CORRIDORS = Path(__file__).parent.parent / "data" / "covered_corridors.json"
+
+def _hav_m(y1, x1, y2, x2):
+    R = 6_371_000
+    p1, p2 = math.radians(y1), math.radians(y2)
+    dp = math.radians(y2 - y1)
+    dl = math.radians(x2 - x1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+def _nearest_graph_node(lat, lng):
+    return min(G.nodes, key=lambda n: _hav_m(lat, lng, G.nodes[n]["y"], G.nodes[n]["x"]))
+
+if CORRIDORS.exists():
+    spec = json.loads(CORRIDORS.read_text())
+    next_id = max(int(n) for n in G.nodes) + 1
+    for cor in spec.get("corridors", []):
+        (alat, alng), (blat, blng) = cor["anchors"]
+        na = _nearest_graph_node(alat, alng)
+        nb = _nearest_graph_node(blat, blng)
+        try:
+            surf = nx.shortest_path(G, na, nb, weight="length")
+        except nx.NetworkXNoPath:
+            print(f"  경고: {cor['name']} 지상 선형 탐색 실패 — 건너뜀")
+            continue
+        attrs = dict(uv_cost=0.0, night_cost=0.1, rain_cost=0.0, highway="corridor")
+        ids = []
+        for n in surf:
+            G.add_node(next_id, x=G.nodes[n]["x"], y=G.nodes[n]["y"])
+            ids.append(next_id)
+            next_id += 1
+        total = 0.0
+        for i in range(len(ids) - 1):
+            u_, v_ = ids[i], ids[i + 1]
+            L = _hav_m(G.nodes[u_]["y"], G.nodes[u_]["x"], G.nodes[v_]["y"], G.nodes[v_]["x"])
+            total += L
+            G.add_edge(u_, v_, length=L, **attrs)
+            G.add_edge(v_, u_, length=L, **attrs)
+        # 출입구: 양끝 + connect_every_m 간격마다 지상 노드와 연결
+        step = cor.get("connect_every_m", 150)
+        walked, last = 0.0, -1e9
+        for i, n in enumerate(surf):
+            if i > 0:
+                p, q = surf[i - 1], n
+                walked += _hav_m(G.nodes[p]["y"], G.nodes[p]["x"], G.nodes[q]["y"], G.nodes[q]["x"])
+            if i == 0 or i == len(surf) - 1 or walked - last >= step:
+                last = walked
+                G.add_edge(ids[i], n, length=8.0, **attrs)
+                G.add_edge(n, ids[i], length=8.0, **attrs)
+        print(f"  코리도 주입: {cor['name']} — 노드 {len(ids)}개, 길이 {total:.0f}m")
+
 out = Path(__file__).parent.parent / "data" / "daejeon_weather_graph.graphml"
 ox.save_graphml(G, out)
 print(f"저장 완료: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges → {out}")
