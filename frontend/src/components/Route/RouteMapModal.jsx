@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { fetchSnappedPath } from "../../api/route";
 
 export default function RouteMapModal({ route, onClose }) {
   const mapRef = useRef(null);
@@ -46,7 +47,22 @@ export default function RouteMapModal({ route, onClose }) {
     path.forEach((p) => bounds.extend(p));
     map.setBounds(bounds);
 
+    // 직선 미리보기 → 보행자 도로 스냅 경로로 교체 (순환 코스도 실제 길 표시)
+    let cancelled = false;
+    fetchSnappedPath(allPoints)
+      .then((data) => {
+        if (cancelled || !(data.polyline?.length >= 2)) return;
+        const snapped = data.polyline.map((p) => new kakao.maps.LatLng(p.lat, p.lng));
+        outerPl.setPath(snapped);
+        innerPl.setPath(snapped);
+        const b = new kakao.maps.LatLngBounds();
+        snapped.forEach((p) => b.extend(p));
+        map.setBounds(b);
+      })
+      .catch(() => {}); // 실패 시 직선 미리보기 유지
+
     return () => {
+      cancelled = true;
       outerPl.setMap(null);
       innerPl.setMap(null);
     };

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { api } from "../../api/client";
+import { fetchSnappedPath } from "../../api/route";
 import { getToken } from "../../api/auth";
 import MapScreenScaffold from "../../layout/MapScreenScaffold";
 
@@ -12,6 +13,7 @@ export default function CustomRouteDraw() {
   const markersRef = useRef([]);
   const polylineRef = useRef(null);
   const pointsRef = useRef([]);
+  const snapSeqRef = useRef(0);
 
   const [points, setPoints] = useState([]);
   const [name, setName] = useState("");
@@ -38,46 +40,51 @@ export default function CustomRouteDraw() {
       const newPoints = [...pointsRef.current, { lat, lng }];
       pointsRef.current = newPoints;
       setPoints([...newPoints]);
-
-      if (polylineRef.current) {
-        polylineRef.current.outer.setMap(null);
-        polylineRef.current.inner.setMap(null);
-        polylineRef.current = null;
-      }
-      if (newPoints.length >= 2) {
-        const path = newPoints.map((p) => new k.maps.LatLng(p.lat, p.lng));
-        const outerPl = new k.maps.Polyline({ path, strokeWeight: 10, strokeColor: "#FFFFFF", strokeOpacity: 0.9, strokeStyle: "solid", endArrow: true });
-        outerPl.setMap(mapInstance.current);
-        const innerPl = new k.maps.Polyline({ path, strokeWeight: 6, strokeColor: "#2C8A57", strokeOpacity: 0.9, strokeStyle: "solid", endArrow: true });
-        innerPl.setMap(mapInstance.current);
-        polylineRef.current = { outer: outerPl, inner: innerPl };
-      }
     });
   }, []);
+
+  const drawPolyline = (pathPoints, { dashed = false } = {}) => {
+    const { kakao } = window;
+    if (polylineRef.current) {
+      polylineRef.current.outer.setMap(null);
+      polylineRef.current.inner.setMap(null);
+      polylineRef.current = null;
+    }
+    if (!kakao || !mapInstance.current || pathPoints.length < 2) return;
+    const path = pathPoints.map((p) => new kakao.maps.LatLng(p.lat, p.lng));
+    const style = dashed ? "shortdash" : "solid";
+    const outerPl = new kakao.maps.Polyline({ path, strokeWeight: 10, strokeColor: "#FFFFFF", strokeOpacity: 0.9, strokeStyle: style, endArrow: true });
+    outerPl.setMap(mapInstance.current);
+    const innerPl = new kakao.maps.Polyline({ path, strokeWeight: 6, strokeColor: "#2C8A57", strokeOpacity: 0.9, strokeStyle: style, endArrow: true });
+    innerPl.setMap(mapInstance.current);
+    polylineRef.current = { outer: outerPl, inner: innerPl };
+  };
+
+  // 점이 바뀔 때마다: 직선 미리보기(점선) 즉시 → 도로 스냅 경로(실선)로 교체
+  useEffect(() => {
+    drawPolyline(points, { dashed: true });
+    if (points.length < 2) return;
+    const seq = ++snapSeqRef.current;
+    fetchSnappedPath(points)
+      .then((data) => {
+        if (seq !== snapSeqRef.current) return; // 이후 클릭으로 무효화된 응답
+        if (data.polyline?.length >= 2) drawPolyline(data.polyline);
+      })
+      .catch(() => {}); // 실패 시 직선 미리보기 유지
+  }, [points]);
 
   const handleUndo = () => {
     if (pointsRef.current.length === 0) return;
     const lastMarker = markersRef.current.pop();
     if (lastMarker) lastMarker.setMap(null);
-    if (polylineRef.current) { polylineRef.current.outer.setMap(null); polylineRef.current.inner.setMap(null); polylineRef.current = null; }
     const newPoints = pointsRef.current.slice(0, -1);
     pointsRef.current = newPoints;
     setPoints([...newPoints]);
-    const { kakao } = window;
-    if (newPoints.length >= 2 && kakao) {
-      const path = newPoints.map((p) => new kakao.maps.LatLng(p.lat, p.lng));
-      const outerPl = new kakao.maps.Polyline({ path, strokeWeight: 10, strokeColor: "#FFFFFF", strokeOpacity: 0.9, strokeStyle: "solid", endArrow: true });
-      outerPl.setMap(mapInstance.current);
-      const innerPl = new kakao.maps.Polyline({ path, strokeWeight: 6, strokeColor: "#2C8A57", strokeOpacity: 0.9, strokeStyle: "solid", endArrow: true });
-      innerPl.setMap(mapInstance.current);
-      polylineRef.current = { outer: outerPl, inner: innerPl };
-    }
   };
 
   const handleClear = () => {
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
-    if (polylineRef.current) { polylineRef.current.outer.setMap(null); polylineRef.current.inner.setMap(null); polylineRef.current = null; }
     pointsRef.current = [];
     setPoints([]);
   };

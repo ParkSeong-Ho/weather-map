@@ -16,6 +16,19 @@ import { api } from "./client";
  * }>}
  */
 
+/**
+ * 클릭한 점들을 보행자 도로에 스냅한 폴리라인을 가져옵니다.
+ * 백엔드: POST /api/route/snap
+ * 순환 코스(시작점 ≈ 도착점)도 경유지를 따라 실제 길이 반환됩니다.
+ *
+ * @param {{lat: number, lng: number}[]} points - 클릭 순서대로의 좌표 목록 (2개 이상)
+ * @returns {Promise<{polyline: {lat: number, lng: number}[], distance: number}>}
+ */
+export const fetchSnappedPath = async (points) => {
+  const { data } = await api.post("/api/route/snap", { points });
+  return data;
+};
+
 export const fetchRouteRecommend = async (
   startLat,
   startLng,
