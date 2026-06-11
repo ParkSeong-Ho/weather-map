@@ -30,6 +30,22 @@ def main():
             "night_cost": float(data.get("night_cost", 0.5)),
             "rain_cost": float(data.get("rain_cost", 0.85)),
         }
+        # 단순화로 접힌 곡선 geometry 보존 — 내부 점만 u→v 방향으로 저장
+        # 평탄 리스트 [lat,lng,lat,lng,...], 소수 5자리 ≈ 1m 정밀도
+        geom = data.get("geometry")
+        if geom is not None:
+            coords = list(geom.coords)  # [(lng, lat), ...]
+            ux, uy = G.nodes[u]["x"], G.nodes[u]["y"]
+            if abs(coords[0][0] - ux) + abs(coords[0][1] - uy) > \
+               abs(coords[-1][0] - ux) + abs(coords[-1][1] - uy):
+                coords.reverse()
+            interior = coords[1:-1]
+            if interior:
+                flat = []
+                for lng, lat in interior:
+                    flat.append(round(lat, 5))
+                    flat.append(round(lng, 5))
+                entry["geom"] = flat
         adj.setdefault(su, []).append(entry)
 
     out = {"nodes": nodes, "adj": adj}

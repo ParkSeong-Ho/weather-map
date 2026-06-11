@@ -1,7 +1,11 @@
 import httpx
 import math
 from app.config import KAKAO_REST_API_KEY, TMAP_APP_KEY
-from app.services.osm_router import compute_weather_route
+from app.services.osm_router import (
+    compute_weather_route,
+    compute_shortest_walk,
+    trim_pedestrian_polyline,
+)
 
 # 정적 경유지 (야간 전용 + 폴백)
 CONTEXT_WAYPOINTS = {
@@ -47,8 +51,22 @@ def _haversine_m(lat1, lng1, lat2, lng2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
+# 보행자가 통과할 수 없는 차량 전용 시설 (경유지 후보에서 제외)
+_IMPASSABLE_KEYWORDS = ("지하차도", "주차장", "고가차도", "터널", "톨게이트", "IC", "램프", "나들목", "분기점")
+
+METRIC_LABELS = {
+    "shade_pct":   "그늘 비율",
+    "lit_pct":     "밝은 구간",
+    "covered_pct": "차폐 구간",
+}
+
+
+def _is_walkable_place(name: str) -> bool:
+    return not any(kw in name for kw in _IMPASSABLE_KEYWORDS)
+
+
 async def _search_place_near(lat: float, lng: float, keyword: str, radius: int) -> dict | None:
-    """카카오 로컬 API로 주변 장소 검색."""
+    """카카오 로컬 API로 주변 장소 검색. 차량 전용 시설은 제외."""
     url = "https://dapi.kakao.com/v2/local/search/keyword.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"}
     params = {
@@ -56,20 +74,21 @@ async def _search_place_near(lat: float, lng: float, keyword: str, radius: int) 
         "x": str(lng),
         "y": str(lat),
         "radius": radius,
-        "size": 1,
+        "size": 5,
         "sort": "distance",
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url, headers=headers, params=params)
             docs = resp.json().get("documents", [])
-        if docs:
-            return {
-                "lat": float(docs[0]["y"]),
-                "lng": float(docs[0]["x"]),
-                "label": docs[0]["place_name"],
-                "type": "dynamic",
-            }
+        for doc in docs:
+            if _is_walkable_place(doc["place_name"]):
+                return {
+                    "lat": float(doc["y"]),
+                    "lng": float(doc["x"]),
+                    "label": doc["place_name"],
+                    "type": "dynamic",
+                }
     except Exception:
         pass
     return None
@@ -261,17 +280,31 @@ async def build_routes(
         start_lat, start_lng, end_lat, end_lng, priority="TIME"
     )
 
-    # 도보/자전거용 폴리라인: T맵 보행자 경로 우선, 실패 시 Kakao RECOMMEND 폴백
+    # 도보/자전거용 폴리라인: T맵 보행자 경로 우선
+    # → 실패 시 OSM 최단 보행 (차 경로 폴백이 블록을 빙 도는 문제 방지)
+    # → 최후 폴백 Kakao RECOMMEND
     foot_polyline, normal_foot_distance = await _fetch_tmap_foot_route(
         start_lat, start_lng, end_lat, end_lng
     )
+    if foot_polyline:
+        # 도착지를 지나쳐 되돌아오는 꼬리 제거 (보행자는 일방통행 제약 없음)
+        foot_polyline = trim_pedestrian_polyline(
+            foot_polyline, start_lat, start_lng, end_lat, end_lng
+        )
+    else:
+        foot_polyline, foot_dist = compute_shortest_walk(
+            start_lat, start_lng, end_lat, end_lng
+        )
+        if foot_polyline:
+            normal_foot_distance = round(foot_dist)
     if not foot_polyline:
         foot_polyline, _, normal_foot_distance = await _fetch_kakao_route_full(
             start_lat, start_lng, end_lat, end_lng, priority="RECOMMEND"
         )
 
     # 날씨 최적 경로: OSM 가중치 라우팅 우선 → 실패 시 Kakao waypoint 폴백
-    context_polyline, context_distance = compute_weather_route(
+    used_wps = []  # 실제로 경로에 반영된 경유지만 기록 (라벨 정확성)
+    context_polyline, context_distance, context_stats = compute_weather_route(
         start_lat, start_lng, end_lat, end_lng,
         context_tags, scores or {}
     )
@@ -285,6 +318,8 @@ async def build_routes(
                 start_lat, start_lng, end_lat, end_lng,
                 waypoints=context_wps, priority="RECOMMEND",
             )
+            if context_polyline:
+                used_wps = context_wps[:1]
         # 폴백 2: 경유지 없는 RECOMMEND
         if not context_polyline:
             context_polyline, context_duration, context_distance = await _fetch_kakao_route_full(
@@ -298,19 +333,33 @@ async def build_routes(
 
     route_option = "bigroad" if "야간" in context_tags else "normal"
 
-    wp_label = context_wps[0]["label"] if context_wps else ""
+    wp_label = used_wps[0]["label"] if used_wps else ""
     s = scores or {}
 
+    via = f" — {wp_label} 경유" if wp_label else ""
+
+    # OSM 경로 통계 → 최단 경로 대비 환경 개선을 수치로 표기
+    w_stat = (context_stats or {}).get("weather") or {}
+    b_stat = (context_stats or {}).get("baseline") or {}
+
+    def _vs(metric: str) -> str:
+        w, b = w_stat.get(metric), b_stat.get(metric)
+        if w is None:
+            return ""
+        if b is not None and w > b:
+            return f" — {METRIC_LABELS[metric]} {w}% (최단 경로 {b}%)"
+        return f" — {METRIC_LABELS[metric]} {w}%"
+
     if s.get("shade", 0) >= 40:
-        context_desc = f"자외선 회피 그늘 경로{f' — {wp_label} 경유' if wp_label else ''}"
+        context_desc = f"자외선 회피 그늘 우선 경로{via or _vs('shade_pct')}"
     elif "야간" in context_tags:
-        context_desc = f"야간 밝은 거리 경로{f' — {wp_label} 경유' if wp_label else ''}"
+        context_desc = f"야간 밝은 거리 우선 경로{via or _vs('lit_pct')}"
     elif "비" in context_tags:
-        context_desc = f"비 조건 실내 경유 안전 경로{f' — {wp_label} 경유' if wp_label else ''}"
+        context_desc = f"비 조건 안전 경로{via or _vs('covered_pct')}" if not wp_label else f"비 조건 실내 경유 안전 경로{via}"
     elif "눈" in context_tags:
-        context_desc = f"눈 조건 실내 경유 안전 경로{f' — {wp_label} 경유' if wp_label else ''}"
+        context_desc = f"눈 조건 안전 경로{via or _vs('covered_pct')}" if not wp_label else f"눈 조건 실내 경유 안전 경로{via}"
     elif "주간" in context_tags:
-        context_desc = f"산책로 권장 경로{f' — {wp_label} 경유' if wp_label else ''}"
+        context_desc = f"산책로 권장 경로{via}"
     else:
         context_desc = "날씨 최적 경로"
 
@@ -329,7 +378,8 @@ async def build_routes(
         "context": {
             "type": "context",
             "description": context_desc,
-            "waypoints": context_wps,
+            "waypoints": used_wps,
+            "weather_stats": context_stats,
             "route_option": route_option,
             "context_tags": context_tags,
             "polyline": context_polyline,
