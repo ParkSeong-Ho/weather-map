@@ -102,6 +102,49 @@ river_by_edge = {idx: _river_fraction(geom) for idx, geom in edges_m.geometry.it
 river_cnt = sum(1 for f in river_by_edge.values() if f > 0.5)
 print(f"  하천변(50%+) 엣지: {river_cnt}/{len(river_by_edge)}")
 
+# ── 보안등 실데이터 (대전 5개 구 공공데이터 CSV — data.go.kr 표준 스키마) ──
+# 골목 야간 점수를 도로 등급 추정이 아닌 실제 보안등 설치 위치로 계산
+import csv
+from shapely.geometry import Point
+from pyproj import Transformer
+
+LAMP_BUFFER_M = 25   # 보안등 1기의 조명 반경
+
+print("보안등 공공데이터 로드 중...")
+_tf = Transformer.from_crs("EPSG:4326", crs_m, always_xy=True)
+_cx, _cy = _tf.transform(CENTER[1], CENTER[0])
+lamp_geoms = []
+for f in sorted((Path(__file__).parent.parent / "data").glob("대전광역시_*보안등*.csv")):
+    n_file = 0
+    with open(f, encoding="utf-8-sig") as fp:
+        for row in csv.DictReader(fp):
+            try:
+                lat, lng = float(row["위도"]), float(row["경도"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            x, y = _tf.transform(lng, lat)
+            if (x - _cx) ** 2 + (y - _cy) ** 2 > (DIST_M + 200) ** 2:
+                continue
+            lamp_geoms.append(Point(x, y).buffer(LAMP_BUFFER_M))
+            n_file += 1
+    print(f"  {f.name}: 반경 내 {n_file}기")
+
+_lamp_tree = STRtree(lamp_geoms) if lamp_geoms else None
+
+def _lamp_fraction(geom) -> float:
+    """엣지 길이 중 보안등 조명 반경에 덮인 비율 (0~1)."""
+    if _lamp_tree is None or geom is None or geom.length == 0:
+        return 0.0
+    idxs = _lamp_tree.query(geom)
+    if len(idxs) == 0:
+        return 0.0
+    cover = unary_union([lamp_geoms[i] for i in idxs])
+    return min(geom.intersection(cover).length / geom.length, 1.0)
+
+lamp_by_edge = {idx: _lamp_fraction(geom) for idx, geom in edges_m.geometry.items()}
+lamp_cnt = sum(1 for v in lamp_by_edge.values() if v > 0.3)
+print(f"  보안등 총 {len(lamp_geoms)}기 / 조명 30%+ 엣지: {lamp_cnt}/{len(lamp_by_edge)}")
+
 # 각 엣지에 날씨 비용 속성 추가
 for u, v, k, data in G.edges(keys=True, data=True):
     highway = data.get("highway", "residential")
@@ -137,14 +180,16 @@ for u, v, k, data in G.edges(keys=True, data=True):
         data["uv_cost"] = round(base * (1 - frac) + 0.15 * frac, 3)
 
     # ── 야간 비용 (0=밝음, 1=어두움) ─────────────────────────────
+    # 간선도로는 가로등 전제(0.2 유지), 골목은 보안등 실데이터로 산출
     if lit == "yes":
         data["night_cost"] = 0.1
     elif highway in ("primary", "secondary", "tertiary"):
-        data["night_cost"] = 0.2   # 주요 도로 = 가로등 많음
-    elif highway in ("footway", "path", "steps"):
-        data["night_cost"] = 0.9   # 소로 = 어두울 가능성
+        data["night_cost"] = 0.2   # 간선 = 도로조명 설치 대상
     else:
-        data["night_cost"] = 0.5
+        dark = 0.9 if highway in ("footway", "path", "steps") else 0.6
+        lamp = lamp_by_edge.get((u, v, k), 0.0)
+        # 보안등 조명에 덮인 비율만큼 0.15(등 아래)로 보간
+        data["night_cost"] = round(dark * (1 - lamp) + 0.15 * lamp, 3)
 
     # ── 비/눈 비용 (0=실내, 1=완전야외) ─────────────────────────
     if walkable_covered:
