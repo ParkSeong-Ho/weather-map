@@ -78,11 +78,17 @@ for u, v, k, data in G.edges(keys=True, data=True):
     covered = data.get("covered", "no")
     tunnel  = data.get("tunnel", "no")
 
+    # 차폐 인정은 보행 가능한 구조물만 — 차도형 지하차도(터널)는 보행자가
+    # 통행할 수 없는데 'UV 0'으로 잡히면 경로가 그쪽으로 빨려간다
+    walkable_covered = covered == "yes" or (
+        tunnel == "yes" and highway in ("footway", "path", "pedestrian", "steps", "corridor")
+    )
+
     # ── UV 비용 (0=완전차단, 1=완전노출) ──────────────────────────
     # 도로 종류는 기본 노출도만 결정 — footway도 나무가 없으면 노출
     # (하천변 산책로가 '그늘'로 오분류되던 문제 수정)
-    if covered == "yes" or tunnel == "yes":
-        data["uv_cost"] = 0.0   # 실내/지하 = UV 없음
+    if walkable_covered:
+        data["uv_cost"] = 0.0   # 보행 지하도/아케이드 = UV 없음
     else:
         base = {
             "trunk": 0.95, "primary": 0.9, "secondary": 0.9, "tertiary": 0.85,
@@ -104,7 +110,7 @@ for u, v, k, data in G.edges(keys=True, data=True):
         data["night_cost"] = 0.5
 
     # ── 비/눈 비용 (0=실내, 1=완전야외) ─────────────────────────
-    if covered == "yes" or tunnel == "yes":
+    if walkable_covered:
         data["rain_cost"] = 0.0
     elif highway == "pedestrian":
         data["rain_cost"] = 0.3   # 보행자 전용도로 (일부 차양)
